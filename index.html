@@ -462,6 +462,9 @@ function catDe(cats, id) {
   };
 }
 // meses entre dois "yyyy-mm"
+function salarioDoMes(salarios, ano, mes) {
+  return salarios.find(s => s.ano === ano && s.mes === mes) || null;
+}
 function mesesEntre(desde, ano, mes) {
   const [y, m] = desde.split("-").map(Number);
   return (ano - y) * 12 + (mes - (m - 1) - 1) + 1; // índice 0-based do mês atual
@@ -484,6 +487,7 @@ function Prumo() {
   const [prestacoes, setPrestacoes] = useState([]); // {id,nome,valor,dia,meses,desde,categoria}
   const [poupanca, setPoupanca] = useState([]); // {id,data,valor}  (valor>0 guardar, <0 retirar)
   const [extras, setExtras] = useState([]); // {id,data,valor,nota} entradas extra
+  const [salarios, setSalarios] = useState([]); // {id,ano,mes,conta,cartao} — salário varia por mês (horas)
   const [carregado, setCarregado] = useState(false);
   const hoje = new Date();
   const [mesRef, setMesRef] = useState({
@@ -509,6 +513,7 @@ function Prumo() {
           if (Array.isArray(d.prestacoes)) setPrestacoes(d.prestacoes);
           if (Array.isArray(d.poupanca)) setPoupanca(d.poupanca);
           if (Array.isArray(d.extras)) setExtras(d.extras);
+          if (Array.isArray(d.salarios)) setSalarios(d.salarios);
         }
       } catch (e) {}
       setCarregado(true);
@@ -525,9 +530,10 @@ function Prumo() {
       fixas,
       prestacoes,
       poupanca,
-      extras
+      extras,
+      salarios
     })).catch(() => {});
-  }, [cfg, cats, gastos, fixas, prestacoes, poupanca, extras, carregado]);
+  }, [cfg, cats, gastos, fixas, prestacoes, poupanca, extras, salarios, carregado]);
 
   /* ---------- derivados do mês em foco ---------- */
   const dados = useMemo(() => {
@@ -546,7 +552,10 @@ function Prumo() {
     });
     const totalPrestacoes = prestacoesMes.reduce((a, p) => a + (p.valor || 0), 0);
     const extrasMes = extras.filter(e => e.data.startsWith(prefixo)).reduce((a, e) => a + (e.valor || 0), 0);
-    const entradas = (cfg.salarioConta || 0) + (cfg.salarioCartao || 0) + extrasMes;
+    const salarioMes = salarioDoMes(salarios, ano, mes);
+    const salConta = salarioMes ? salarioMes.conta || 0 : 0;
+    const salCartao = salarioMes ? salarioMes.cartao || 0 : 0;
+    const entradas = salConta + salCartao + extrasMes;
     const saiu = totalGastos + totalFixas + totalPrestacoes;
     const sobrou = entradas - saiu;
     const guardadoMes = poupanca.filter(p => p.data.startsWith(prefixo)).reduce((a, p) => a + (p.valor || 0), 0);
@@ -554,7 +563,7 @@ function Prumo() {
 
     // cartão refeição restante (gastos do mês pagos com cartão)
     const gastoCartao = gastosMes.filter(g => g.metodo === "cartao").reduce((a, g) => a + g.valor, 0);
-    const cartaoRestante = (cfg.salarioCartao || 0) - gastoCartao;
+    const cartaoRestante = salCartao - gastoCartao;
 
     // por categoria (gastos + fixas + prestações) para o donut
     const porCat = {};
@@ -621,9 +630,13 @@ function Prumo() {
       ehMesAtual,
       diaHoje,
       extrasMes,
-      extrasList: extras.filter(e => e.data.startsWith(prefixo)).sort((a, b) => a.data < b.data ? 1 : -1)
+      extrasList: extras.filter(e => e.data.startsWith(prefixo)).sort((a, b) => a.data < b.data ? 1 : -1),
+      salarioMes: salarioMes ? {
+        conta: salConta,
+        cartao: salCartao
+      } : null
     };
-  }, [mesRef, gastos, fixas, prestacoes, poupanca, extras, cfg, cats]);
+  }, [mesRef, gastos, fixas, prestacoes, poupanca, extras, salarios, cfg, cats]);
 
   /* mapa dia(número) → lista de itens (gasto/fixa/prestação) para o calendário */
   const porDia = useMemo(() => {
@@ -754,6 +767,23 @@ function Prumo() {
   function apagarExtra(id) {
     setExtras(p => p.filter(x => x.id !== id));
   }
+  function salvarSalario(ano, mes, conta, cartao) {
+    setSalarios(p => {
+      const existe = p.find(s => s.ano === ano && s.mes === mes);
+      if (existe) return p.map(s => s.ano === ano && s.mes === mes ? {
+        ...s,
+        conta,
+        cartao
+      } : s);
+      return [...p, {
+        id: uid(),
+        ano,
+        mes,
+        conta,
+        cartao
+      }];
+    });
+  }
   function mudarMes(delta) {
     setMesRef(r => {
       let m = r.mes + delta,
@@ -784,6 +814,7 @@ function Prumo() {
         prestacoes,
         poupanca,
         extras,
+        salarios,
         versao: 1,
         data: new Date().toISOString()
       }, null, 2);
@@ -822,6 +853,7 @@ function Prumo() {
         setPrestacoes(Array.isArray(d.prestacoes) ? d.prestacoes : []);
         setPoupanca(Array.isArray(d.poupanca) ? d.poupanca : []);
         setExtras(Array.isArray(d.extras) ? d.extras : []);
+        setSalarios(Array.isArray(d.salarios) ? d.salarios : []);
       } catch (e) {
         alert("Não foi possível ler o ficheiro de backup.");
       }
@@ -943,7 +975,9 @@ function Prumo() {
     onIrDias: () => setAba("dias"),
     onIrPoupanca: () => setAba("poupanca"),
     onAddExtra: addExtra,
-    onApagarExtra: apagarExtra
+    onApagarExtra: apagarExtra,
+    mesRef: mesRef,
+    onSalvarSalario: salvarSalario
   }), aba === "dias" && /*#__PURE__*/React.createElement(AbaDias, {
     dados: dados,
     porDia: porDia,
@@ -1074,10 +1108,13 @@ function AbaResumo({
   onIrDias,
   onIrPoupanca,
   onAddExtra,
-  onApagarExtra
+  onApagarExtra,
+  mesRef,
+  onSalvarSalario
 }) {
   const [escondido, setEscondido] = useState(false);
   const [showExtra, setShowExtra] = useState(false);
+  const [editarSalario, setEditarSalario] = useState(false);
   const {
     entradas,
     saiu,
@@ -1093,7 +1130,8 @@ function AbaResumo({
     ehMesAtual,
     diaHoje,
     extrasMes,
-    extrasList
+    extrasList,
+    salarioMes
   } = dados;
   const pagarHoje = aPagar.filter(x => x.dia === diaHoje);
   const dicas = [];
@@ -1277,6 +1315,87 @@ function AbaResumo({
       marginTop: 1
     }
   }, eur0(saiu)))))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...vidro(),
+      border: !salarioMes ? `1.5px solid ${C.acc}55` : undefined
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: editarSalario || !salarioMes ? 12 : 0
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      fontWeight: 700,
+      letterSpacing: "0.07em",
+      textTransform: "uppercase",
+      color: C.dim
+    }
+  }, "Salário de ", tituloMes), salarioMes && !editarSalario && /*#__PURE__*/React.createElement("button", {
+    onClick: () => setEditarSalario(true),
+    style: {
+      background: C.accDim,
+      border: "none",
+      color: C.acc,
+      borderRadius: 9,
+      padding: "6px 11px",
+      fontSize: 12.5,
+      fontWeight: 700,
+      cursor: "pointer",
+      fontFamily: "inherit"
+    }
+  }, "Editar")), !salarioMes || editarSalario ? /*#__PURE__*/React.createElement(FormSalario, {
+    inicial: salarioMes,
+    onSalvar: (conta, cartao) => {
+      onSalvarSalario(mesRef.ano, mesRef.mes, conta, cartao);
+      setEditarSalario(false);
+    }
+  }) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 11
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: C.dim
+    }
+  }, "Conta"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 17,
+      fontWeight: 800,
+      marginTop: 2
+    }
+  }, eur0(salarioMes.conta))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: C.dim
+    }
+  }, "Cartão refeição"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 17,
+      fontWeight: 800,
+      marginTop: 2
+    }
+  }, eur0(salarioMes.cartao)))), !salarioMes && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: C.dim,
+      lineHeight: 1.5,
+      marginTop: 10
+    }
+  }, "O salário varia com as horas — regista aqui quanto recebeste este mês.")), /*#__PURE__*/React.createElement("div", {
     style: vidro()
   }, /*#__PURE__*/React.createElement("div", {
     style: secTitulo
@@ -1586,6 +1705,42 @@ function AbaResumo({
     onClick: onIrDias,
     style: btnSec
   }, "+ Registar um gasto"));
+}
+function FormSalario({
+  inicial,
+  onSalvar
+}) {
+  const [conta, setConta] = useState(inicial ? String(inicial.conta || "") : "");
+  const [cartao, setCartao] = useState(inicial ? String(inicial.cartao || "") : "");
+  const num = v => {
+    const n = parseFloat((v || "").toString().replace(",", "."));
+    return isNaN(n) ? 0 : n;
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gap: 9
+    }
+  }, /*#__PURE__*/React.createElement(Campo, {
+    label: "Vai para a conta (€)"
+  }, /*#__PURE__*/React.createElement("input", {
+    inputMode: "decimal",
+    value: conta,
+    onChange: e => setConta(e.target.value),
+    placeholder: "Ex.: 1189",
+    style: inp
+  })), /*#__PURE__*/React.createElement(Campo, {
+    label: "Cartão refeição (€)"
+  }, /*#__PURE__*/React.createElement("input", {
+    inputMode: "decimal",
+    value: cartao,
+    onChange: e => setCartao(e.target.value),
+    placeholder: "Ex.: 219",
+    style: inp
+  })), /*#__PURE__*/React.createElement("button", {
+    onClick: () => onSalvar(num(conta), num(cartao)),
+    style: btnPri
+  }, "Guardar salário deste mês"));
 }
 function FormExtra({
   onAdd
@@ -2790,39 +2945,17 @@ function AbaAjustes({
     style: {
       ...vidro(),
       display: "grid",
-      gap: 12
+      gap: 10
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: secTitulo
-  }, "Salário"), /*#__PURE__*/React.createElement(Campo, {
-    label: "Vai para a conta (€)"
-  }, /*#__PURE__*/React.createElement("input", {
-    inputMode: "decimal",
-    defaultValue: cfg.salarioConta || "",
-    onBlur: e => setCfg(c => ({
-      ...c,
-      salarioConta: num(e.target.value)
-    })),
-    placeholder: "Ex.: 1189",
-    style: inp
-  })), /*#__PURE__*/React.createElement(Campo, {
-    label: "Cartão refeição (€)"
-  }, /*#__PURE__*/React.createElement("input", {
-    inputMode: "decimal",
-    defaultValue: cfg.salarioCartao || "",
-    onBlur: e => setCfg(c => ({
-      ...c,
-      salarioCartao: num(e.target.value)
-    })),
-    placeholder: "Ex.: 219",
-    style: inp
-  })), /*#__PURE__*/React.createElement("div", {
+  }, "Salário"), /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 12,
+      fontSize: 12.5,
       color: C.dim,
       lineHeight: 1.5
     }
-  }, "O que recebes por mês (fixo, repete todos os meses). O cartão refeição é seguido à parte. Dinheiro extra (trading, biscate) regista-se no Resumo, em \"Entradas extra\".")), /*#__PURE__*/React.createElement("div", {
+  }, "Como o salário varia com as horas, regista-se mês a mês — no Resumo, logo abaixo do painel. Dinheiro extra (trading, biscate) regista-se ali também, em \"Entradas extra\".")), /*#__PURE__*/React.createElement("div", {
     style: {
       ...vidro(),
       display: "grid",
