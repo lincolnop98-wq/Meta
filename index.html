@@ -708,6 +708,7 @@ function Prumo() {
     }
     return m;
   }, [dados, gastos, fixas, cats]);
+  const pessoasExistentes = useMemo(() => Array.from(new Set(gastos.map(g => g.pessoa).filter(Boolean))).sort((a, b) => a.localeCompare(b, "pt")), [gastos]);
   const analiseAno = useMemo(() => {
     const ano = mesRef.ano;
     const meses = [];
@@ -746,12 +747,49 @@ function Prumo() {
       acc += mm.guardado;
       return acc;
     });
+    const porPessoa = {};
+    for (const x of gastos) {
+      if (!x.pessoa || !x.data.startsWith(ano + "-")) continue;
+      if (!porPessoa[x.pessoa]) porPessoa[x.pessoa] = {
+        nome: x.pessoa,
+        total: 0,
+        porCat: {},
+        porMetodo: {},
+        meses: Array(12).fill(0),
+        itens: []
+      };
+      const pp = porPessoa[x.pessoa];
+      pp.total += x.valor;
+      pp.porCat[x.categoria] = (pp.porCat[x.categoria] || 0) + x.valor;
+      pp.porMetodo[x.metodo] = (pp.porMetodo[x.metodo] || 0) + x.valor;
+      pp.meses[Number(x.data.slice(5, 7)) - 1] += x.valor;
+      pp.itens.push({
+        id: x.id,
+        data: x.data,
+        valor: x.valor,
+        categoria: x.categoria,
+        metodo: x.metodo,
+        nota: x.nota
+      });
+    }
+    const pessoas = Object.values(porPessoa).map(pp => ({
+      ...pp,
+      porCatList: Object.entries(pp.porCat).map(([id, v]) => ({
+        ...catDe(cats, id),
+        valor: v
+      })).sort((a, b) => b.valor - a.valor),
+      itens: pp.itens.map(it => ({
+        ...it,
+        cat: catDe(cats, it.categoria)
+      })).sort((a, b) => a.data < b.data ? 1 : -1)
+    })).sort((a, b) => b.total - a.total);
     return {
       ano,
       meses,
       medias,
       poupCum,
-      nm
+      nm,
+      pessoas
     };
   }, [mesRef.ano, gastos, fixas, prestacoes, poupanca, cats]);
 
@@ -1030,7 +1068,8 @@ function Prumo() {
     onMes: mudarMes,
     cats: cats,
     onAdd: addGasto,
-    onApagar: apagarGasto
+    onApagar: apagarGasto,
+    pessoasExistentes: pessoasExistentes
   }), aba === "analise" && /*#__PURE__*/React.createElement(AbaAnalise, {
     analise: analiseAno,
     dados: dados,
@@ -1975,8 +2014,11 @@ function AbaAnalise({
   const {
     meses,
     medias,
-    poupCum
+    poupCum,
+    pessoas
   } = analise;
+  const [pessoaSel, setPessoaSel] = useState(null);
+  const pessoaAtual = pessoas.find(p => p.nome === pessoaSel) || pessoas[0] || null;
   const totalAno = meses.reduce((a, m) => a + m.saiu, 0);
   const totalGuardado = meses.reduce((a, m) => a + m.guardado, 0);
   return /*#__PURE__*/React.createElement("div", {
@@ -2080,6 +2122,216 @@ function AbaAnalise({
     style: vidro()
   }, /*#__PURE__*/React.createElement("div", {
     style: secTitulo
+  }, "Gastos por pessoa"), pessoas.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: C.dim,
+      lineHeight: 1.5
+    }
+  }, "Ao registares um gasto, marca-o para alguém (ex.: a tua namorada, a tua mãe) em \"Marcar para alguém\". Aparece aqui quanto gastaste, em quê e como pagaste — sem sair da categoria real do gasto.") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 8,
+      marginBottom: 16
+    }
+  }, pessoas.map(p => {
+    const sel = pessoaAtual && pessoaAtual.nome === p.nome;
+    return /*#__PURE__*/React.createElement("button", {
+      key: p.nome,
+      onClick: () => setPessoaSel(p.nome),
+      style: {
+        padding: "7px 13px",
+        borderRadius: 14,
+        fontSize: 12.5,
+        fontFamily: "inherit",
+        cursor: "pointer",
+        border: `1px solid ${sel ? C.acc : C.border}`,
+        background: sel ? C.accDim : "transparent",
+        color: sel ? C.acc : C.text,
+        fontWeight: 700
+      }
+    }, p.nome);
+  })), pessoaAtual && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "baseline",
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12.5,
+      color: C.dim
+    }
+  }, "Total em ", analise.ano), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontFamily: "'Inter', system-ui, sans-serif",
+      fontWeight: 800,
+      fontSize: 22
+    }
+  }, eur(pessoaAtual.total))), /*#__PURE__*/React.createElement(BarrasAno, {
+    meses: pessoaAtual.meses.map((v, m) => ({
+      m,
+      saiu: v
+    })),
+    mesRef: mesRef
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gap: 12,
+      marginTop: 18
+    }
+  }, pessoaAtual.porCatList.map(c => {
+    const larg = pessoaAtual.porCatList[0].valor ? c.valor / pessoaAtual.porCatList[0].valor * 100 : 0;
+    return /*#__PURE__*/React.createElement("div", {
+      key: c.id
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        justifyContent: "space-between",
+        fontSize: 13,
+        marginBottom: 6
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        width: 22,
+        height: 22,
+        borderRadius: "50%",
+        background: c.cor + "22",
+        display: "grid",
+        placeItems: "center"
+      }
+    }, /*#__PURE__*/React.createElement(IconeCat, {
+      id: c.id,
+      icone: c.icone,
+      cor: c.cor,
+      size: 12
+    })), c.nome), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontWeight: 700
+      }
+    }, eur0(c.valor))), /*#__PURE__*/React.createElement("div", {
+      style: {
+        height: 7,
+        borderRadius: 5,
+        background: "rgba(255,255,255,0.06)",
+        overflow: "hidden"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        width: `${larg}%`,
+        height: "100%",
+        background: c.cor,
+        borderRadius: 5
+      }
+    })));
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 9,
+      marginTop: 16
+    }
+  }, METODOS.map(m => /*#__PURE__*/React.createElement("div", {
+    key: m.id,
+    style: {
+      flex: 1,
+      ...vidro(),
+      padding: "10px 12px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement(IconeMetodo, {
+    id: m.id,
+    cor: C.dim
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      color: C.dim
+    }
+  }, m.nome)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 14,
+      marginTop: 4
+    }
+  }, eur0(pessoaAtual.porMetodo[m.id] || 0))))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 18
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      letterSpacing: "0.06em",
+      textTransform: "uppercase",
+      color: C.dim,
+      marginBottom: 10
+    }
+  }, "Todos os gastos"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gap: 2
+    }
+  }, pessoaAtual.itens.map((it, i) => /*#__PURE__*/React.createElement("div", {
+    key: it.id || i,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 10,
+      padding: "8px 0",
+      borderTop: i ? `1px solid ${C.border}` : "none"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 28,
+      height: 28,
+      borderRadius: "50%",
+      background: it.cat.cor + "22",
+      display: "grid",
+      placeItems: "center",
+      flexShrink: 0
+    }
+  }, /*#__PURE__*/React.createElement(IconeCat, {
+    id: it.cat.id,
+    icone: it.cat.icone,
+    cor: it.cat.cor,
+    size: 13
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 600
+    }
+  }, it.cat.nome, it.nota ? ` · ${it.nota}` : ""), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: C.dim
+    }
+  }, fmtData(it.data), " · ", METODOS.find(mm => mm.id === it.metodo)?.nome)), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      color: C.down,
+      flexShrink: 0
+    }
+  }, "−", eur(it.valor))))))))), /*#__PURE__*/React.createElement("div", {
+    style: vidro()
+  }, /*#__PURE__*/React.createElement("div", {
+    style: secTitulo
   }, "Poupança ao longo do ano"), /*#__PURE__*/React.createElement(LinhaEvolucao, {
     valores: poupCum.some(v => v !== 0) ? poupCum : [0, 0]
   }), /*#__PURE__*/React.createElement("div", {
@@ -2158,7 +2410,8 @@ function AbaDias({
   onMes,
   cats,
   onAdd,
-  onApagar
+  onApagar,
+  pessoasExistentes
 }) {
   const [diaSel, setDiaSel] = useState(null); // número do dia
   const {
@@ -2316,7 +2569,7 @@ function AbaDias({
       fontSize: 11,
       color: C.dim
     }
-  }, x.tipo === "gasto" ? METODOS.find(m => m.id === x.metodo)?.emoji + " " + (METODOS.find(m => m.id === x.metodo)?.nome || "") : x.tipo === "fixa" ? "conta fixa" : "prestação")), /*#__PURE__*/React.createElement("span", {
+  }, x.tipo === "gasto" ? METODOS.find(m => m.id === x.metodo)?.emoji + " " + (METODOS.find(m => m.id === x.metodo)?.nome || "") : x.tipo === "fixa" ? "conta fixa" : "prestação", x.tipo === "gasto" && x.pessoa ? ` · ${x.pessoa}` : "")), /*#__PURE__*/React.createElement("span", {
     style: {
       fontFamily: "'Inter', system-ui, sans-serif",
       fontWeight: 700,
@@ -2337,7 +2590,8 @@ function AbaDias({
     cats: cats,
     onAdd: g => {
       onAdd(g);
-    }
+    },
+    pessoasExistentes: pessoasExistentes
   })), !diaSel && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 13,
@@ -2350,12 +2604,14 @@ function AbaDias({
 function FormGasto({
   isoData,
   cats,
-  onAdd
+  onAdd,
+  pessoasExistentes = []
 }) {
   const [valor, setValor] = useState("");
   const [cat, setCat] = useState(cats[0]?.id || "outros");
   const [metodo, setMetodo] = useState("conta");
   const [nota, setNota] = useState("");
+  const [pessoa, setPessoa] = useState("");
   const v = parseFloat((valor || "").replace(",", "."));
   const podeGravar = v > 0;
   return /*#__PURE__*/React.createElement("div", {
@@ -2448,7 +2704,35 @@ function FormGasto({
     onChange: e => setNota(e.target.value),
     placeholder: "Nota (opcional)",
     style: inp
-  }), /*#__PURE__*/React.createElement("button", {
+  }), /*#__PURE__*/React.createElement(Campo, {
+    label: "Marcar para alguém (opcional)"
+  }, pessoasExistentes.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 7,
+      marginBottom: 8
+    }
+  }, pessoasExistentes.map(nm => /*#__PURE__*/React.createElement("button", {
+    key: nm,
+    onClick: () => setPessoa(p => p === nm ? "" : nm),
+    style: {
+      padding: "6px 11px",
+      borderRadius: 12,
+      fontSize: 12.5,
+      fontFamily: "inherit",
+      cursor: "pointer",
+      border: `1px solid ${pessoa === nm ? C.acc : C.border}`,
+      background: pessoa === nm ? C.accDim : "transparent",
+      color: pessoa === nm ? C.acc : C.dim,
+      fontWeight: 600
+    }
+  }, nm))), /*#__PURE__*/React.createElement("input", {
+    value: pessoa,
+    onChange: e => setPessoa(e.target.value),
+    placeholder: "Nome (ex.: Namorada, Mãe)",
+    style: inp
+  })), /*#__PURE__*/React.createElement("button", {
     disabled: !podeGravar,
     onClick: () => {
       onAdd({
@@ -2456,7 +2740,8 @@ function FormGasto({
         valor: v,
         categoria: cat,
         metodo,
-        nota: nota.trim()
+        nota: nota.trim(),
+        pessoa: pessoa.trim() || null
       });
       setValor("");
       setNota("");
