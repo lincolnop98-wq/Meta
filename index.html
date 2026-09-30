@@ -571,7 +571,8 @@ function Prumo() {
     const prefixo = `${ano}-${String(mes + 1).padStart(2, "0")}`;
     const nDias = new Date(ano, mes + 1, 0).getDate();
     const gastosMes = gastos.filter(g => g.data.startsWith(prefixo));
-    const totalGastos = gastosMes.reduce((a, g) => a + (g.valor || 0), 0);
+    // só conta para o dinheiro real (conta/dinheiro) — o cartão refeição é seguido à parte, não é dinheiro que dá para juntar
+    const totalGastos = gastosMes.filter(g => g.metodo !== "cartao").reduce((a, g) => a + (g.valor || 0), 0);
     const totalFixas = fixas.reduce((a, f) => a + (f.valor || 0), 0);
     const prestacoesMes = prestacoes.filter(p => {
       const idx = mesesEntre(p.desde, ano, mes);
@@ -582,7 +583,8 @@ function Prumo() {
     const salarioMes = salarioDoMes(salarios, ano, mes);
     const salConta = salarioMes ? salarioMes.conta || 0 : 0;
     const salCartao = salarioMes ? salarioMes.cartao || 0 : 0;
-    const entradas = salConta + salCartao + extrasMes;
+    // entradas reais (dinheiro que dá para juntar) — o cartão refeição fica de fora, é seguido à parte
+    const entradas = salConta + extrasMes;
     const saiu = totalGastos + totalFixas + totalPrestacoes;
     const sobrou = entradas - saiu;
     const guardadoMes = poupanca.filter(p => p.data.startsWith(prefixo)).reduce((a, p) => a + (p.valor || 0), 0);
@@ -605,6 +607,7 @@ function Prumo() {
     // curva de saldo ao longo do mês (entradas no dia 1, saídas nos dias)
     const porDiaSaida = {};
     for (const g of gastosMes) {
+      if (g.metodo === "cartao") continue; // não sai do saldo real
       const d = Number(g.data.slice(8, 10));
       porDiaSaida[d] = (porDiaSaida[d] || 0) + g.valor;
     }
@@ -1525,6 +1528,13 @@ function AbaResumo({
     valor: -totalGastos,
     cor: C.down
   }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: C.dim,
+      marginTop: -3,
+      marginBottom: 2
+    }
+  }, "só conta/dinheiro — o cartão refeição é dinheiro à parte, vês abaixo"), /*#__PURE__*/React.createElement("div", {
     style: {
       height: 1,
       background: C.border,
