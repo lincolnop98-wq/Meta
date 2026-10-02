@@ -464,8 +464,7 @@ const eur = v => new Intl.NumberFormat("pt-PT", {
 }).format(v || 0);
 const eur0 = v => new Intl.NumberFormat("pt-PT", {
   style: "currency",
-  currency: "EUR",
-  maximumFractionDigits: 0
+  currency: "EUR"
 }).format(v || 0);
 const isoLocal = d => {
   const y = d.getFullYear();
