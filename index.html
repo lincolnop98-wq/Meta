@@ -622,6 +622,7 @@ function Prumo() {
   const [gastos, setGastos] = useState([]); // {id,data,valor,categoria,metodo,nota}
   const [fixas, setFixas] = useState([]); // {id,nome,valor,dia,categoria}
   const [prestacoes, setPrestacoes] = useState([]); // {id,nome,valor,dia,meses,desde,categoria}
+  const [dividas, setDividas] = useState([]); // {id,nome,valorTotal,categoria,criada,concluida,pagamentos:[{id,data,valor}]}
   const [poupanca, setPoupanca] = useState([]); // {id,data,valor}  (valor>0 guardar, <0 retirar)
   const [extras, setExtras] = useState([]); // {id,data,valor,nota} entradas extra
   const [salarios, setSalarios] = useState([]); // {id,ano,mes,conta,cartao} — salário varia por mês (horas)
@@ -648,6 +649,7 @@ function Prumo() {
           if (Array.isArray(d.gastos)) setGastos(d.gastos);
           if (Array.isArray(d.fixas)) setFixas(d.fixas);
           if (Array.isArray(d.prestacoes)) setPrestacoes(d.prestacoes);
+          if (Array.isArray(d.dividas)) setDividas(d.dividas);
           if (Array.isArray(d.poupanca)) setPoupanca(d.poupanca);
           if (Array.isArray(d.extras)) setExtras(d.extras);
           if (Array.isArray(d.salarios)) setSalarios(d.salarios);
@@ -666,11 +668,12 @@ function Prumo() {
       gastos,
       fixas,
       prestacoes,
+      dividas,
       poupanca,
       extras,
       salarios
     })).catch(() => {});
-  }, [cfg, cats, gastos, fixas, prestacoes, poupanca, extras, salarios, carregado]);
+  }, [cfg, cats, gastos, fixas, prestacoes, dividas, poupanca, extras, salarios, carregado]);
 
   /* ---------- derivados do mês em foco ---------- */
   const dados = useMemo(() => {
@@ -689,13 +692,38 @@ function Prumo() {
       return idx >= 0 && idx < p.meses;
     });
     const totalPrestacoes = prestacoesMes.reduce((a, p) => a + (p.valor || 0), 0);
+
+    // dívidas: valor livre, o que importa é o que foi PAGO este mês (pagamentos marcados manualmente)
+    const pagamentosDividasMes = [];
+    for (const dv of dividas) {
+      for (const pg of dv.pagamentos || []) {
+        if (pg.data.startsWith(prefixo)) pagamentosDividasMes.push({
+          ...pg,
+          dividaId: dv.id,
+          nome: dv.nome,
+          categoria: dv.categoria
+        });
+      }
+    }
+    const totalDividas = pagamentosDividasMes.reduce((a, pg) => a + (pg.valor || 0), 0);
+    const dividasResumo = dividas.map(dv => {
+      const pago = (dv.pagamentos || []).reduce((a, pg) => a + (pg.valor || 0), 0);
+      const pagoMes = (dv.pagamentos || []).filter(pg => pg.data.startsWith(prefixo)).reduce((a, pg) => a + (pg.valor || 0), 0);
+      return {
+        ...dv,
+        pago,
+        pagoMes,
+        restante: Math.max(0, dv.valorTotal - pago)
+      };
+    });
+    const totalDividasRestante = dividasResumo.filter(dv => !dv.concluida).reduce((a, dv) => a + dv.restante, 0);
     const extrasMes = extras.filter(e => e.data.startsWith(prefixo)).reduce((a, e) => a + (e.valor || 0), 0);
     const salarioMes = salarioDoMes(salarios, ano, mes);
     const salConta = salarioMes ? salarioMes.conta || 0 : 0;
     const salCartao = salarioMes ? salarioMes.cartao || 0 : 0;
     // entradas reais (dinheiro que dá para juntar) — o cartão refeição fica de fora, é seguido à parte
     const entradas = salConta + extrasMes;
-    const saiu = totalGastos + totalFixas + totalPrestacoes;
+    const saiu = totalGastos + totalFixas + totalPrestacoes + totalDividas;
     const sobrou = entradas - saiu;
     const guardadoMes = poupanca.filter(p => p.data.startsWith(prefixo)).reduce((a, p) => a + (p.valor || 0), 0);
     const poupancaTotal = poupanca.reduce((a, p) => a + (p.valor || 0), 0);
@@ -709,6 +737,7 @@ function Prumo() {
     for (const g of gastosMes) porCat[g.categoria] = (porCat[g.categoria] || 0) + g.valor;
     for (const f of fixas) porCat[f.categoria || "casa"] = (porCat[f.categoria || "casa"] || 0) + f.valor;
     for (const p of prestacoesMes) porCat[p.categoria || "outros"] = (porCat[p.categoria || "outros"] || 0) + p.valor;
+    for (const pg of pagamentosDividasMes) porCat[pg.categoria || "outros"] = (porCat[pg.categoria || "outros"] || 0) + pg.valor;
     const catList = Object.entries(porCat).map(([id, v]) => ({
       ...catDe(cats, id),
       valor: v
@@ -723,6 +752,10 @@ function Prumo() {
     }
     for (const f of fixas) porDiaSaida[f.dia] = (porDiaSaida[f.dia] || 0) + f.valor;
     for (const p of prestacoesMes) porDiaSaida[p.dia] = (porDiaSaida[p.dia] || 0) + p.valor;
+    for (const pg of pagamentosDividasMes) {
+      const d = Number(pg.data.slice(8, 10));
+      porDiaSaida[d] = (porDiaSaida[d] || 0) + pg.valor;
+    }
     let saldo = entradas;
     const curva = [];
     for (let d = 1; d <= nDias; d++) {
@@ -776,9 +809,12 @@ function Prumo() {
       salarioMes: salarioMes ? {
         conta: salConta,
         cartao: salCartao
-      } : null
+      } : null,
+      totalDividas,
+      totalDividasRestante,
+      dividasResumo
     };
-  }, [mesRef, gastos, fixas, prestacoes, poupanca, extras, salarios, cfg, cats]);
+  }, [mesRef, gastos, fixas, prestacoes, dividas, poupanca, extras, salarios, cfg, cats]);
 
   /* mapa dia(número) → lista de itens (gasto/fixa/prestação) para o calendário */
   const porDia = useMemo(() => {
@@ -952,6 +988,33 @@ function Prumo() {
   function apagarPrestacao(id) {
     setPrestacoes(prev => prev.filter(p => p.id !== id));
   }
+  function addDivida(d) {
+    setDividas(p => [...p, {
+      id: uid(),
+      concluida: false,
+      pagamentos: [],
+      ...d
+    }]);
+  }
+  function apagarDivida(id) {
+    setDividas(p => p.filter(d => d.id !== id));
+  }
+  function addPagamentoDivida(dividaId, valor, data) {
+    setDividas(p => p.map(d => d.id === dividaId ? {
+      ...d,
+      pagamentos: [...d.pagamentos, {
+        id: uid(),
+        valor,
+        data
+      }]
+    } : d));
+  }
+  function concluirDivida(id, manter) {
+    if (manter) setDividas(p => p.map(d => d.id === id ? {
+      ...d,
+      concluida: true
+    } : d));else apagarDivida(id);
+  }
   function addPoupanca(valor) {
     setPoupanca(p => [...p, {
       id: uid(),
@@ -1033,6 +1096,7 @@ function Prumo() {
         gastos,
         fixas,
         prestacoes,
+        dividas,
         poupanca,
         extras,
         salarios,
@@ -1072,6 +1136,7 @@ function Prumo() {
         setGastos(Array.isArray(d.gastos) ? d.gastos : []);
         setFixas(Array.isArray(d.fixas) ? d.fixas : []);
         setPrestacoes(Array.isArray(d.prestacoes) ? d.prestacoes : []);
+        setDividas(Array.isArray(d.dividas) ? d.dividas : []);
         setPoupanca(Array.isArray(d.poupanca) ? d.poupanca : []);
         setExtras(Array.isArray(d.extras) ? d.extras : []);
         setSalarios(Array.isArray(d.salarios) ? d.salarios : []);
@@ -1225,12 +1290,17 @@ function Prumo() {
   }), aba === "contas" && /*#__PURE__*/React.createElement(AbaContas, {
     fixas: fixas,
     prestacoes: prestacoes,
+    dividas: dados.dividasResumo,
     cats: cats,
     mesRef: mesRef,
     onAddFixa: addFixa,
     onApagarFixa: apagarFixa,
     onAddPrest: addPrestacao,
-    onApagarPrest: apagarPrestacao
+    onApagarPrest: apagarPrestacao,
+    onAddDivida: addDivida,
+    onApagarDivida: apagarDivida,
+    onPagamentoDivida: addPagamentoDivida,
+    onConcluirDivida: concluirDivida
   }), aba === "ajustes" && /*#__PURE__*/React.createElement(AbaAjustes, {
     cfg: cfg,
     setCfg: setCfg,
@@ -1355,7 +1425,9 @@ function AbaResumo({
     diaHoje,
     extrasMes,
     extrasList,
-    salarioMes
+    salarioMes,
+    totalDividas,
+    totalDividasRestante
   } = dados;
   const pagarHoje = aPagar.filter(x => x.dia === diaHoje);
   const dicas = [];
@@ -1642,6 +1714,10 @@ function AbaResumo({
     rotulo: "Prestações",
     valor: -totalPrestacoes,
     cor: C.down
+  }), totalDividas > 0 && /*#__PURE__*/React.createElement(LinhaResumo, {
+    rotulo: "Dívidas (pago este mês)",
+    valor: -totalDividas,
+    cor: C.down
   }), /*#__PURE__*/React.createElement(LinhaResumo, {
     rotulo: "Gastos do dia a dia",
     valor: -totalGastos,
@@ -1678,6 +1754,20 @@ function AbaResumo({
     rotulo: "Cartão refeição",
     valor: eur0(cartaoRestante),
     cor: C.up
+  })), totalDividasRestante > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      gap: 11
+    }
+  }, /*#__PURE__*/React.createElement(MiniCard, {
+    rotulo: "Deves ainda",
+    valor: eur0(totalDividasRestante),
+    cor: C.down
+  }), /*#__PURE__*/React.createElement(MiniCard, {
+    rotulo: "Pagaste em dívidas este mês",
+    valor: eur0(totalDividas),
+    cor: C.acc
   })), /*#__PURE__*/React.createElement("div", {
     style: vidro()
   }, /*#__PURE__*/React.createElement("div", {
@@ -3249,14 +3339,20 @@ function AbaPoupanca({
 function AbaContas({
   fixas,
   prestacoes,
+  dividas,
   cats,
   mesRef,
   onAddFixa,
   onApagarFixa,
   onAddPrest,
-  onApagarPrest
+  onApagarPrest,
+  onAddDivida,
+  onApagarDivida,
+  onPagamentoDivida,
+  onConcluirDivida
 }) {
-  const [modo, setModo] = useState(null); // 'fixa' | 'prest'
+  const [modo, setModo] = useState(null); // 'fixa' | 'prest' | 'divida'
+  const [pagandoId, setPagandoId] = useState(null);
   return /*#__PURE__*/React.createElement("div", {
     style: {
       display: "grid",
@@ -3265,13 +3361,15 @@ function AbaContas({
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
-      gap: 8
+      gap: 8,
+      flexWrap: "wrap"
     }
   }, /*#__PURE__*/React.createElement("button", {
     onClick: () => setModo(modo === "fixa" ? null : "fixa"),
     style: {
       ...btnSec,
       flex: 1,
+      minWidth: 100,
       ...(modo === "fixa" ? {
         borderColor: C.acc,
         color: C.acc
@@ -3282,12 +3380,31 @@ function AbaContas({
     style: {
       ...btnSec,
       flex: 1,
+      minWidth: 100,
       ...(modo === "prest" ? {
         borderColor: C.acc,
         color: C.acc
       } : {})
     }
-  }, "+ Prestação")), modo === "fixa" && /*#__PURE__*/React.createElement(FormFixa, {
+  }, "+ Prestação"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setModo(modo === "divida" ? null : "divida"),
+    style: {
+      ...btnSec,
+      flex: 1,
+      minWidth: 100,
+      ...(modo === "divida" ? {
+        borderColor: C.acc,
+        color: C.acc
+      } : {})
+    }
+  }, "+ Dívida")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: C.dim,
+      marginTop: -10,
+      lineHeight: 1.5
+    }
+  }, "Prestação é fixa todo mês, com prazo certo. Dívida é livre — defines o total que deves e vais marcando os pagamentos conforme os fazes, até zerar."), modo === "fixa" && /*#__PURE__*/React.createElement(FormFixa, {
     cats: cats,
     onAdd: f => {
       onAddFixa(f);
@@ -3300,7 +3417,162 @@ function AbaContas({
       onAddPrest(p);
       setModo(null);
     }
-  }), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }), modo === "divida" && /*#__PURE__*/React.createElement(FormDivida, {
+    cats: cats,
+    onAdd: d => {
+      onAddDivida(d);
+      setModo(null);
+    }
+  }), dividas.filter(d => !d.concluida).length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: secTitulo
+  }, "Dívidas"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gap: 10
+    }
+  }, dividas.filter(d => !d.concluida).map(d => {
+    const larg = d.valorTotal ? Math.min(100, d.pago / d.valorTotal * 100) : 0;
+    const concluida = d.restante <= 0;
+    return /*#__PURE__*/React.createElement("div", {
+      key: d.id,
+      style: vidro()
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 11
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        width: 32,
+        height: 32,
+        borderRadius: "50%",
+        background: catDe(cats, d.categoria).cor + "22",
+        display: "grid",
+        placeItems: "center",
+        flexShrink: 0
+      }
+    }, /*#__PURE__*/React.createElement(IconeCat, {
+      id: d.categoria,
+      icone: catDe(cats, d.categoria).icone,
+      cor: catDe(cats, d.categoria).cor
+    })), /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 0
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 14,
+        fontWeight: 600
+      }
+    }, d.nome), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: C.dim
+      }
+    }, "Deves ", eur(d.valorTotal), " no total", d.pagoMes > 0 ? ` · pagaste ${eur(d.pagoMes)} este mês` : "")), /*#__PURE__*/React.createElement("button", {
+      onClick: () => onApagarDivida(d.id),
+      style: {
+        background: "none",
+        border: "none",
+        color: C.dim,
+        cursor: "pointer",
+        fontSize: 18,
+        flexShrink: 0
+      }
+    }, "×")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        height: 8,
+        borderRadius: 5,
+        background: "rgba(255,255,255,0.06)",
+        overflow: "hidden",
+        margin: "11px 0 8px"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        width: `${larg}%`,
+        height: "100%",
+        background: concluida ? C.up : C.acc,
+        borderRadius: 5
+      }
+    })), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        justifyContent: "space-between",
+        fontSize: 12.5
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: C.dim
+      }
+    }, "Pago: ", /*#__PURE__*/React.createElement("b", {
+      style: {
+        color: C.text
+      }
+    }, eur(d.pago))), /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: C.dim
+      }
+    }, "Falta: ", /*#__PURE__*/React.createElement("b", {
+      style: {
+        color: concluida ? C.up : C.down
+      }
+    }, eur(d.restante)))), concluida ? /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 12,
+        padding: "11px 12px",
+        borderRadius: 12,
+        background: C.up + "18",
+        border: `1px solid ${C.up}44`
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 700,
+        color: C.up,
+        marginBottom: 9
+      }
+    }, "🎉 Dívida concluída!"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 8
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: () => onConcluirDivida(d.id, true),
+      style: {
+        ...btnSec,
+        flex: 1,
+        fontSize: 12.5,
+        padding: "9px 10px"
+      }
+    }, "Manter guardada"), /*#__PURE__*/React.createElement("button", {
+      onClick: () => onApagarDivida(d.id),
+      style: {
+        ...btnSec,
+        flex: 1,
+        fontSize: 12.5,
+        padding: "9px 10px",
+        color: C.down,
+        borderColor: C.down + "55"
+      }
+    }, "Apagar"))) : pagandoId === d.id ? /*#__PURE__*/React.createElement(FormPagamentoDivida, {
+      onCancelar: () => setPagandoId(null),
+      onConfirmar: (valor, data) => {
+        onPagamentoDivida(d.id, valor, data);
+        setPagandoId(null);
+      }
+    }) : /*#__PURE__*/React.createElement("button", {
+      onClick: () => setPagandoId(d.id),
+      style: {
+        ...btnSec,
+        width: "100%",
+        marginTop: 12,
+        fontSize: 12.5,
+        padding: "9px 10px"
+      }
+    }, "+ Registar pagamento"));
+  }))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: secTitulo
   }, "Contas fixas"), fixas.length === 0 ? /*#__PURE__*/React.createElement(Vazio, {
     texto: "Sem contas fixas. Adiciona a renda, net, luz…"
@@ -3353,6 +3625,65 @@ function AbaContas({
     }
   }, eur(f.valor)), /*#__PURE__*/React.createElement("button", {
     onClick: () => onApagarFixa(f.id),
+    style: {
+      background: "none",
+      border: "none",
+      color: C.dim,
+      cursor: "pointer",
+      fontSize: 18
+    }
+  }, "×"))))), dividas.filter(d => d.concluida).length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: secTitulo
+  }, "Dívidas concluídas"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...vidro(),
+      padding: 0,
+      overflow: "hidden"
+    }
+  }, dividas.filter(d => d.concluida).map((d, i) => /*#__PURE__*/React.createElement("div", {
+    key: d.id,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 11,
+      padding: "12px 14px",
+      borderTop: i ? `1px solid ${C.border}` : "none",
+      opacity: 0.6
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 32,
+      height: 32,
+      borderRadius: "50%",
+      background: catDe(cats, d.categoria).cor + "22",
+      display: "grid",
+      placeItems: "center"
+    }
+  }, /*#__PURE__*/React.createElement(IconeCat, {
+    id: d.categoria,
+    icone: catDe(cats, d.categoria).icone,
+    cor: catDe(cats, d.categoria).cor
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 14,
+      fontWeight: 600
+    }
+  }, d.nome), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: C.up
+    }
+  }, "✓ paga por completo")), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontFamily: "'Inter', system-ui, sans-serif",
+      fontWeight: 700
+    }
+  }, eur(d.valorTotal)), /*#__PURE__*/React.createElement("button", {
+    onClick: () => onApagarDivida(d.id),
     style: {
       background: "none",
       border: "none",
@@ -3625,6 +3956,146 @@ function FormPrestacao({
       opacity: ok ? 1 : 0.4
     }
   }, "Guardar prestação"));
+}
+function FormDivida({
+  cats,
+  onAdd
+}) {
+  const [nome, setNome] = useState("");
+  const [valor, setValor] = useState("");
+  const [cat, setCat] = useState("outros");
+  const v = parseFloat((valor || "").replace(",", "."));
+  const ok = nome.trim() && v > 0;
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...vidro(),
+      display: "grid",
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    value: nome,
+    onChange: e => setNome(e.target.value),
+    placeholder: "A quem/o quê (ex.: Mãe, Cartão de crédito)",
+    style: inp
+  }), /*#__PURE__*/React.createElement("input", {
+    inputMode: "decimal",
+    value: valor,
+    onChange: e => setValor(e.target.value),
+    placeholder: "Quanto deves no total €",
+    style: inp
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 7
+    }
+  }, cats.map(c => /*#__PURE__*/React.createElement("button", {
+    key: c.id,
+    onClick: () => setCat(c.id),
+    style: {
+      padding: "6px 11px",
+      borderRadius: 12,
+      fontSize: 12.5,
+      fontFamily: "inherit",
+      cursor: "pointer",
+      border: `1px solid ${cat === c.id ? c.cor : C.border}`,
+      background: cat === c.id ? c.cor + "22" : "transparent",
+      color: C.text,
+      fontWeight: 600
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement(IconeCat, {
+    id: c.id,
+    icone: c.icone,
+    cor: c.cor,
+    size: 15
+  }), c.nome)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: C.dim,
+      lineHeight: 1.5
+    }
+  }, "Depois vais lá e marcas cada pagamento que fizeres — vai descontando até zerar."), /*#__PURE__*/React.createElement("button", {
+    disabled: !ok,
+    onClick: () => onAdd({
+      nome: nome.trim(),
+      valorTotal: v,
+      categoria: cat
+    }),
+    style: {
+      ...btnPri,
+      opacity: ok ? 1 : 0.4
+    }
+  }, "Guardar dívida"));
+}
+function FormPagamentoDivida({
+  onConfirmar,
+  onCancelar
+}) {
+  const [valor, setValor] = useState("");
+  const [data, setData] = useState(hojeISO());
+  const v = parseFloat((valor || "").replace(",", "."));
+  const ok = v > 0;
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gap: 9,
+      marginTop: 12,
+      paddingTop: 12,
+      borderTop: `1px solid ${C.border}`
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    inputMode: "decimal",
+    value: valor,
+    onChange: e => setValor(e.target.value),
+    placeholder: "Quanto pagaste €",
+    style: {
+      ...inp,
+      flex: 1
+    },
+    autoFocus: true
+  }), /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: data,
+    onChange: e => setData(e.target.value),
+    style: {
+      ...inp,
+      width: 150
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onCancelar,
+    style: {
+      ...btnSec,
+      flex: 1,
+      fontSize: 12.5,
+      padding: "9px 10px"
+    }
+  }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
+    disabled: !ok,
+    onClick: () => onConfirmar(v, data),
+    style: {
+      ...btnPri,
+      flex: 1,
+      fontSize: 12.5,
+      padding: "9px 10px",
+      opacity: ok ? 1 : 0.4
+    }
+  }, "Confirmar pagamento")));
 }
 
 /* ============================================================
